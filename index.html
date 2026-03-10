@@ -559,31 +559,28 @@
         let selectedAnswer = null;
         let questionsAnswered = 0;
         let currentFilter = 'cs';
+        let allData = null;
 
         async function loadCategories() {
             try {
-                const response = await fetch('api.php?action=getCategories');
-                categories = await response.json();
+                const response = await fetch('questions.json');
+                allData = await response.json();
+                categories = allData.categories;
                 renderCategories(categories);
                 populateCategorySelect();
                 updateStats();
             } catch (error) {
                 console.error('Error loading categories:', error);
                 document.getElementById('categoriesGrid').innerHTML = 
-                    '<div class="error-message">Error loading categories. Make sure the database is set up correctly.</div>';
+                    '<div class="error-message">Error loading data. Please refresh the page.</div>';
             }
         }
 
-        async function updateStats() {
-            try {
-                const response = await fetch('api.php?action=getStats');
-                const stats = await response.json();
-                document.getElementById('totalQuestions').textContent = stats.total_questions;
-                document.getElementById('totalCategories').textContent = stats.total_categories;
-                document.getElementById('questionsAnswered').textContent = questionsAnswered;
-            } catch (error) {
-                console.error('Error loading stats:', error);
-            }
+        function updateStats() {
+            if (!allData) return;
+            document.getElementById('totalQuestions').textContent = allData.questions.length;
+            document.getElementById('totalCategories').textContent = allData.categories.length;
+            document.getElementById('questionsAnswered').textContent = questionsAnswered;
         }
 
         function renderCategories(cats) {
@@ -643,37 +640,39 @@
             await startQuiz();
         }
 
-        async function startQuiz() {
+        function startQuiz() {
             const categoryId = document.getElementById('quizCategory').value;
-            const limit = document.getElementById('questionCount').value;
+            const limit = parseInt(document.getElementById('questionCount').value);
             
-            let url = `api.php?action=getQuestions&limit=${limit}`;
+            let filteredQuestions = [...allData.questions];
             if (categoryId) {
-                url += `&category_id=${categoryId}`;
+                filteredQuestions = filteredQuestions.filter(q => q.category_id === parseInt(categoryId));
+            }
+            
+            quizQuestions = shuffleArray(filteredQuestions).slice(0, limit);
+                
+            if (quizQuestions.length === 0) {
+                alert('No questions found for this category.');
+                return;
             }
 
-            try {
-                const response = await fetch(url);
-                quizQuestions = await response.json();
-                
-                if (quizQuestions.length === 0) {
-                    alert('No questions found for this category.');
-                    return;
-                }
+            currentQuestionIndex = 0;
+            correctAnswers = 0;
+            selectedAnswer = null;
+            
+            document.getElementById('quizStart').style.display = 'none';
+            document.getElementById('quizContainer').classList.add('active');
+            document.getElementById('quizResults').classList.remove('active');
+            
+            loadQuestion();
+        }
 
-                currentQuestionIndex = 0;
-                correctAnswers = 0;
-                selectedAnswer = null;
-                
-                document.getElementById('quizStart').style.display = 'none';
-                document.getElementById('quizContainer').classList.add('active');
-                document.getElementById('quizResults').classList.remove('active');
-                
-                loadQuestion();
-            } catch (error) {
-                console.error('Error loading questions:', error);
-                alert('Error loading questions. Please try again.');
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
             }
+            return array;
         }
 
         function loadQuestion() {
@@ -704,7 +703,7 @@
             document.getElementById('progressFill').style.width = `${progress}%`;
         }
 
-        async function selectOption(letter) {
+        function selectOption(letter) {
             if (selectedAnswer) return;
             
             selectedAnswer = letter;
@@ -717,34 +716,24 @@
                 }
             });
 
-            try {
-                const response = await fetch('api.php?action=submitAnswer', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question_id: q.id, answer: letter })
-                });
-                
-                const result = await response.json();
-                questionsAnswered++;
-                
-                const selectedBtn = document.querySelector(`.option-btn[data-letter="${letter}"]`);
-                
-                if (result.correct) {
-                    correctAnswers++;
-                    selectedBtn.classList.add('correct');
-                } else {
-                    selectedBtn.classList.add('incorrect');
-                    document.querySelector(`.option-btn[data-letter="${result.correct_answer}"]`).classList.add('correct');
-                }
-
-                document.getElementById('explanationText').textContent = result.explanation || 'No explanation available.';
-                document.getElementById('explanation').classList.add('show');
-                document.getElementById('nextBtn').disabled = false;
-                
-                updateStats();
-            } catch (error) {
-                console.error('Error submitting answer:', error);
+            const isCorrect = letter.toUpperCase() === q.correct_answer.toUpperCase();
+            questionsAnswered++;
+            
+            const selectedBtn = document.querySelector(`.option-btn[data-letter="${letter}"]`);
+            
+            if (isCorrect) {
+                correctAnswers++;
+                selectedBtn.classList.add('correct');
+            } else {
+                selectedBtn.classList.add('incorrect');
+                document.querySelector(`.option-btn[data-letter="${q.correct_answer}"]`).classList.add('correct');
             }
+
+            document.getElementById('explanationText').textContent = q.explanation || 'No explanation available.';
+            document.getElementById('explanation').classList.add('show');
+            document.getElementById('nextBtn').disabled = false;
+            
+            updateStats();
         }
 
         function nextQuestion() {
