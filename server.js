@@ -1,16 +1,10 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const mysql = require('mysql2/promise');
 
 const PORT = 3000;
 
-const db = mysql.createPool({
-    host: 'localhost',
-    user: 'root',
-    password: '12345',
-    database: 'cse_reviewer'
-});
+const data = JSON.parse(fs.readFileSync('questions.json', 'utf8'));
 
 const mimeTypes = {
     '.html': 'text/html',
@@ -22,7 +16,15 @@ const mimeTypes = {
     '.svg': 'image/svg+xml'
 };
 
-const server = http.createServer(async (req, res) => {
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
+
+const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const pathname = url.pathname;
 
@@ -42,49 +44,50 @@ const server = http.createServer(async (req, res) => {
         try {
             switch (action) {
                 case 'getCategories':
-                    const [categories] = await db.query('SELECT * FROM categories ORDER BY is_professional, name');
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify(categories));
+                    res.end(JSON.stringify(data.categories));
                     break;
 
                 case 'getQuestions':
                     const categoryId = url.searchParams.get('category_id');
                     const limit = parseInt(url.searchParams.get('limit')) || 20;
-                    let questions;
+                    let questions = [...data.questions];
+                    
                     if (categoryId) {
-                        [questions] = await db.query('SELECT * FROM questions WHERE category_id = ? ORDER BY RAND() LIMIT ?', [categoryId, limit]);
-                    } else {
-                        [questions] = await db.query('SELECT * FROM questions ORDER BY RAND() LIMIT ?', [limit]);
+                        questions = questions.filter(q => q.category_id === parseInt(categoryId));
                     }
+                    
+                    questions = shuffleArray(questions).slice(0, limit);
                     questions.forEach(q => delete q.correct_answer);
+                    
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify(questions));
                     break;
 
                 case 'getRandomQuestion':
                     const catId = url.searchParams.get('category_id');
-                    let [randQ] = catId 
-                        ? await db.query('SELECT * FROM questions WHERE category_id = ? ORDER BY RAND() LIMIT 1', [catId])
-                        : await db.query('SELECT * FROM questions ORDER BY RAND() LIMIT 1');
-                    if (randQ[0]) delete randQ[0].correct_answer;
+                    let randQ = [...data.questions];
+                    
+                    if (catId) {
+                        randQ = randQ.filter(q => q.category_id === parseInt(catId));
+                    }
+                    
+                    randQ = shuffleArray(randQ)[0];
+                    if (randQ) delete randQ.correct_answer;
+                    
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify(randQ[0] || { error: 'No question found' }));
+                    res.end(JSON.stringify(randQ || { error: 'No question found' }));
                     break;
 
                 case 'getStats':
-                    const [totalQ] = await db.query('SELECT COUNT(*) as count FROM questions');
-                    const [totalC] = await db.query('SELECT COUNT(*) as count FROM categories');
-                    const [catStats] = await db.query(`
-                        SELECT c.name, COUNT(q.id) as question_count 
-                        FROM categories c 
-                        LEFT JOIN questions q ON c.id = q.category_id 
-                        GROUP BY c.id, c.name
-                    `);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
-                        total_questions: totalQ[0].count,
-                        total_categories: totalC[0].count,
-                        by_category: catStats
+                        total_questions: data.questions.length,
+                        total_categories: data.categories.length,
+                        by_category: data.categories.map(c => ({
+                            name: c.name,
+                            question_count: data.questions.filter(q => q.category_id === c.id).length
+                        }))
                     }));
                     break;
 
@@ -92,18 +95,20 @@ const server = http.createServer(async (req, res) => {
                     let body = '';
                     for await (const chunk of req) body += chunk;
                     const { question_id, answer } = JSON.parse(body);
-                    const [q] = await db.query('SELECT correct_answer, explanation FROM questions WHERE id = ?', [question_id]);
-                    if (!q[0]) {
+                    
+                    const q = data.questions.find(q => q.id === question_id);
+                    if (!q) {
                         res.writeHead(404, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ error: 'Question not found' }));
                         break;
                     }
-                    const isCorrect = answer.toUpperCase() === q[0].correct_answer.toUpperCase();
+                    
+                    const isCorrect = answer.toUpperCase() === q.correct_answer.toUpperCase();
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         correct: isCorrect,
-                        correct_answer: q[0].correct_answer,
-                        explanation: q[0].explanation
+                        correct_answer: q.correct_answer,
+                        explanation: q.explanation
                     }));
                     break;
 
